@@ -1,16 +1,18 @@
 pipeline {
   agent any
   options { timestamps() }
+
   environment {
-    REGISTRY = "docker.io/<your_dockerhub_username>"   // change or remove if not pushing
+    REGISTRY = "docker.io/<your_dockerhub_username>"   // change or leave unused
     IMAGE = "webapp"
+    APP_DIR = "app"
     SHA = "${env.GIT_COMMIT?.take(7) ?: 'local'}"
   }
 
   stages {
     stage('Checkout') { steps { checkout scm } }
 
-    stage('Bootstrap Node & Docker (if missing)') {
+    stage('Bootstrap tools (if missing)') {
       steps {
         sh '''
           set -e
@@ -29,37 +31,32 @@ pipeline {
       }
     }
 
-    stage('Install & Test') {
+    stage('Install & Test (Node)') {
       steps {
-        dir('app') {
+        dir("${env.APP_DIR}") {
           sh '''
             set -e
             npm ci
-            # run a quick smoke test if present
-            if [ -f test/app.test.js ]; then
-              (npm start &) >/dev/null 2>&1
-              sleep 1
-              npm test
-              pkill -f "node app.js" || true
-            else
-              echo "No tests found, skipping."
-            fi
+            (npm start &) >/dev/null 2>&1
+            sleep 1
+            npm test
+            pkill -f "node app.js" || true
           '''
         }
       }
     }
 
-    stage('Build Docker image') {
-      when { expression { return fileExists('app/Dockerfile') } }
+    stage('Build Docker image (optional)') {
+      when { expression { return fileExists("${env.APP_DIR}/Dockerfile") } }
       steps {
-        dir('app') {
+        dir("${env.APP_DIR}") {
           sh 'docker build -t $REGISTRY/$IMAGE:$SHA .'
         }
       }
     }
 
     stage('Push image (optional)') {
-      when { expression { return fileExists('app/Dockerfile') } }
+      when { expression { return fileExists("${env.APP_DIR}/Dockerfile") } }
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
           sh '''
@@ -71,7 +68,7 @@ pipeline {
     }
 
     stage('Tag latest on main (optional)') {
-      when { allOf { branch 'main'; expression { return fileExists('app/Dockerfile') } } }
+      when { allOf { branch 'main'; expression { return fileExists("${env.APP_DIR}/Dockerfile") } } }
       steps {
         sh '''
           docker tag $REGISTRY/$IMAGE:$SHA $REGISTRY/$IMAGE:latest
